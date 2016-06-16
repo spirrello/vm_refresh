@@ -5,3 +5,7 @@ Usage:
 
 python vm_refresh [environment] [vm1,vm2,vm3]
 
+
+Requirements
+- .kah file with hashed password
+- pyvmomi python module
