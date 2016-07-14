@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Python program refreshing the Calico nodes to a previous snapshot.
+Python program refreshing VMs to a previous snapshot.
 """
 
 from __future__ import print_function
@@ -30,6 +30,9 @@ import base64
 import time
 import json
 import sys
+import getpass
+import encrypt
+
 
 #filedir = '/home/spirrello/scripts/Rundeck-Network-Jobs/vcenter/'
 
@@ -59,81 +62,58 @@ def GetArgs():
    args = parser.parse_args()
    return args
 
-def refresh_playground(machine_list):
+def refresh_vms(machine_list, environment):
    """This method will refresh the VMs in the office."""
-   print (machine_list)
+
+   print ("VMs to be refreshed in the " + environment + " environment:")
+   for machine in machine_list:
+       print (machine)
    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
    context.verify_mode = ssl.CERT_NONE
-   si = SmartConnect(host='playvcenter6.liaison.tech',
-                     user='root',
-                     pwd=grab_info(),
-                     port=443,
-                     sslContext=context)
-   if not si:
-       print("Could not connect to the specified host using specified "
-             "username and password")
-       return -1
-
-   atexit.register(Disconnect, si)
-
-   content = si.RetrieveContent()
-   for child in content.rootFolder.childEntity:
-      if hasattr(child,'hostFolder'):
-
-         datacenter = child
-         vmFolder = datacenter.vmFolder
-         vmList = vmFolder.childEntity
-         #print (hostList)
-
-
-         for vm in vmList:
-             #hostList_name.append(host.name)
-             if vm.name in machine_list:
-                 print ("Powering off:" , vm.name)
-                 vm.PowerOff()
-                 time.sleep(5)
-
-                 #Revert the snapshot.....
-                 snapshots = vm.snapshot.rootSnapshotList
-                 for snapshot in snapshots:
-                     print ("Reverting back to " , snapshot.name)
-                     snap_obj = snapshot.snapshot
-                     snap_obj.RevertToSnapshot_Task()
-                     time.sleep(10)
-                     print ("Powering on:" , vm.name)
-                     vm.PowerOn()
+   if environment == "dev":
+       user = "LIAISONTECH\svc_rdeckvm_tech"
+       host = "at4m-lvvc01.liaison.tech"
+       try:# open('office-playground.key', 'r') and open('office-playground.pem', 'r'):     
+           password = encrypt.decrypt_login('tech-vmware.key')
+       except Exception as e:
+           #print (e)
+           print ("\nERROR: Symmetric key and/or password file not found not found.  Please generate one and name it office-playground.key")
+           return -1
+   elif environment == "office":
+       user = getpass.getuser()
+       host = "10.10.16.105"
+       try:# open('office-playground.key', 'r') and open('office-playground.pem', 'r'):     
+           password = encrypt.decrypt_login('office-playground.key')
+       except Exception as e:
+           #print (e)
+           print ("\nERROR: Symmetric key and/or password file not found not found.  Please generate one and name it office-playground.key")
+           return -1
+   else:
+       print ("please enter a valid parameter for the environment...")
+   
 
    print("\nAll nodes have been reverted to a previous snapshot.\n")
 
 
-def refresh_home():
-   """This method will refresh the VMs at home."""
 
 def main():
    """
-   This preps the Calico vms for testing.  Powers them off, reverts snapshots and powers them back on.
+   Powers them off, reverts snapshots and powers them back on.
    """
-
-   # args = GetArgs()
-   # if args.password:
-   #    password = args.password
-   # else:
-   #    password = getpass.getpass(prompt='Enter password for host %s and '
-   #                                      'user %s: ' % (args.host,args.user))
-
    if len(sys.argv) != 3:
       print ("Incorrect number of parameters, please enter home or office as an option.  The VMs must be comma delimited.")
       sys.exit(1)
 
    machine_list = sys.argv[2].replace(" ", "").split(',')
-   if sys.argv[1] == "office":
-      print ("Refreshing office nodes...")
-      refresh_playground(machine_list)
-   elif sys.argv[1] == "home":
-      print ("Refreshing home nodes...")
-      refresh_home()
+   if sys.argv[1] == "office" or sys.argv[1] == "dev":
+      environment = sys.argv[1]
+      
+      refresh_vms(machine_list, environment)
+   # elif sys.argv[1] == "home":
+   #    print ("Refreshing home nodes...")
+   #    refresh_vms()
    else:
-      print ("please enter office or home as a parameter")
+      print ("please enter a valid environment as a parameter...")
 
 
 
