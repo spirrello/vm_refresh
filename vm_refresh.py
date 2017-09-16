@@ -15,108 +15,138 @@
 # limitations under the License.
 
 """
-Python program refreshing VMs to a previous snapshot.
+Python program for listing the vms on an ESX / vCenter host
 """
 
 from __future__ import print_function
 
 from pyVim.connect import SmartConnect, Disconnect
+from pyVmomi import vim
 
 import argparse
 import atexit
 import getpass
 import ssl
-import base64
-import time
-import json
-import sys
-import getpass
 import encrypt
+import sys
+import time
 
 
-#filedir = '/home/spirrello/scripts/Rundeck-Network-Jobs/vcenter/'
 
 
-def grab_info():
-    with open('.kah') as json_data_file:
-        data = json.load(json_data_file)
-        data = data['roller']
-        data=base64.b64decode(data)
-    return data
-
-
-def GetArgs():
+def PrintVmInfo(vm, depth=1):
    """
-   Supports the command-line arguments listed below.
+   Print information for a particular virtual machine or recurse into a folder
+   or vApp with depth protection
    """
-   parser = argparse.ArgumentParser(
-       description='Process args for retrieving all the Virtual Machines')
-   parser.add_argument('-s', '--host', required=True, action='store',
-                       help='Remote host to connect to')
-   parser.add_argument('-o', '--port', type=int, default=443, action='store',
-                       help='Port to connect on')
-   parser.add_argument('-u', '--user', required=True, action='store',
-                       help='User name to use when connecting to host')
-   parser.add_argument('-p', '--password', required=False, action='store',
-                       help='Password to use when connecting to host')
-   args = parser.parse_args()
-   return args
+   maxdepth = 10
 
-def refresh_vms(machine_list, environment):
-   """This method will refresh the VMs in the office."""
+   # if this is a group it will have children. if it does, recurse into them
+   # and then return
+   if hasattr(vm, 'childEntity'):
+      if depth > maxdepth:
+         return
+      vmList = vm.childEntity
+      for c in vmList:
+         PrintVmInfo(c, depth+1)
+      return
 
-   print ("VMs to be refreshed in the " + environment + " environment:")
-   for machine in machine_list:
-       print (machine)
-   context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
-   context.verify_mode = ssl.CERT_NONE
-   if environment == "dev":
-       user = "LIAISONTECH\svc_rdeckvm_tech"
-       host = "at4m-lvvc01.liaison.tech"
-       try:# open('office-playground.key', 'r') and open('office-playground.pem', 'r'):     
-           password = encrypt.decrypt_login('tech-vmware.key')
-       except Exception as e:
-           #print (e)
-           print ("\nERROR: Symmetric key and/or password file not found not found.  Please generate one and name it office-playground.key")
-           return -1
-   elif environment == "office":
-       user = getpass.getuser()
-       host = "10.10.16.105"
-       try:# open('office-playground.key', 'r') and open('office-playground.pem', 'r'):     
-           password = encrypt.decrypt_login('office-playground.key')
-       except Exception as e:
-           #print (e)
-           print ("\nERROR: Symmetric key and/or password file not found not found.  Please generate one and name it office-playground.key")
-           return -1
-   else:
-       print ("please enter a valid parameter for the environment...")
-   
-
-   print("\nAll nodes have been reverted to a previous snapshot.\n")
-
-
+   # if this is a vApp, it likely contains child VMs
+   # (vApps can nest vApps, but it is hardly a common usecase, so ignore that)
+   if isinstance(vm, vim.VirtualApp):
+      vmList = vm.vm
+      for c in vmList:
+         PrintVmInfo(c, depth + 1)
+      return
+   #We'll check if the VM is in the list.
+   if [x for x in vm_cluster if x == vm.name]:
+       print("\nPowering off " + vm.name)
+       vm.PowerOff()
+       time.sleep(10)
+       snapshots = vm.snapshot.rootSnapshotList
+       for snapshot in snapshots:
+           print ("Restoring vm to snapshot:" , snapshot.name)
+           snap_obj = snapshot.snapshot
+           snap_obj.RevertToSnapshot_Task()
+           time.sleep(5)
+           print ("Powering on " + vm.name)
+           vm.PowerOn()
+           #sys.exit(0)
+   # summary = vm.summary
+   # print("Name       : ", summary.config.name)
+   # print("Path       : ", summary.config.vmPathName)
+   # print("Guest      : ", summary.config.guestFullName)
+   # annotation = summary.config.annotation
+   # if annotation != None and annotation != "":
+   #    print("Annotation : ", annotation)
+   # print("State      : ", summary.runtime.powerState)
+   # if summary.guest != None:
+   #    ip = summary.guest.ipAddress
+   #    if ip != None and ip != "":
+   #       print("IP         : ", ip)
+   # if summary.runtime.question != None:
+   #    print("Question  : ", summary.runtime.question.text)
+   # print("")
 
 def main():
    """
-   Powers them off, reverts snapshots and powers them back on.
+   Simple command-line program for listing the virtual machines on a system.
    """
-   if len(sys.argv) != 3:
-      print ("Incorrect number of parameters, please enter home or office as an option.  The VMs must be comma delimited.")
-      sys.exit(1)
+   global vm_cluster
 
-   machine_list = sys.argv[2].replace(" ", "").split(',')
-   if sys.argv[1] == "office" or sys.argv[1] == "dev":
-      environment = sys.argv[1]
-      
-      refresh_vms(machine_list, environment)
-   # elif sys.argv[1] == "home":
-   #    print ("Refreshing home nodes...")
-   #    refresh_vms()
-   else:
-      print ("please enter a valid environment as a parameter...")
+   parser = argparse.ArgumentParser(
+       description='Process args for retrieving all the Virtual Machines')
 
+   parser.add_argument('-l', '--login', required=True, action='store',
+                   help='login for VCenter access')
+
+   parser.add_argument('-k', '--key', required=True, action='store',
+                   help='secured key for authentication')
+
+   parser.add_argument('-vc', '--vcenter', required=True, action='store',
+                   help='VCenter host')
 
 
+   parser.add_argument('-v', '--vm', required=True, action='store',
+                   help='Comma delimited list of VMs')
+    
+   args = parser.parse_args()
+
+   vm_cluster = str(args.vm).split(',')
+   
+   try:
+       password = encrypt.decrypt_login(args.key)
+
+   except Exception as e:
+       #print (e)
+       print ("\nERROR: Symmetric key and/or password file not found not found.")
+       return -1
+
+   context = None
+   if hasattr(ssl, '_create_unverified_context'):
+      context = ssl._create_unverified_context()
+   si = SmartConnect(host=args.vcenter,
+                     user=args.login,
+                     pwd=password,
+                     port=443,
+                     sslContext=context)
+   if not si:
+       print("Could not connect to the specified host using specified "
+             "username and password")
+       return -1
+
+   atexit.register(Disconnect, si)
+
+   content = si.RetrieveContent()
+   for child in content.rootFolder.childEntity:
+      if hasattr(child, 'vmFolder'):
+         datacenter = child
+         vmFolder = datacenter.vmFolder
+         vmList = vmFolder.childEntity
+         for vm in vmList:
+            PrintVmInfo(vm)
+
+   print('\nAll VMs have been refreshed.')
    return 0
 
 # Start program
